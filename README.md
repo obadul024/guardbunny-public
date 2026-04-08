@@ -9,6 +9,17 @@ It treats every plan as untrusted input, converts it into typed actions, checks 
 > It reduces risk compared to direct LLM execution, but does not eliminate it.
 
 ---
+## TL;DR
+
+LLMs propose actions.
+
+GuardBunny decides what actually runs.
+
+It parses a workflow into typed actions, enforces a policy (default deny), and executes only allowed operations.
+
+Think of it as a control layer between an LLM/agent and your system.
+
+---
 
 ## What GuardBunny Is
 
@@ -25,6 +36,11 @@ It treats every plan as untrusted input, converts it into typed actions, checks 
 * Not a guarantee of safety
 
 ---
+
+
+## Architecture
+![GuardBunny Architecture](docs/architecture.png)
+
 
 ## Core Model
 
@@ -73,9 +89,14 @@ echo "hello world" > /tmp/guardbunny/test.txt
 Run:
 
 ```bash
-guardbunny run examples/safe_read.gb \
+
+cat > /tmp/guardbunny/input.json <<'EOF'
+{"file_path": "/tmp/guardbunny/test.txt"}
+EOF
+
+guardbunny examples/safe_read.gb \
   --policy policies/default_policy.yaml \
-  --input '{"file_path": "/tmp/guardbunny/test.txt"}'
+  --input /tmp/guardbunny/input.json
 ```
 
 Run tests:
@@ -162,6 +183,13 @@ Even with allowlisted binaries:
 
 * arguments are fully controlled by the caller
 * many standard binaries expose powerful behaviors
+
+For the MVP:
+
+* keep the binary allowlist extremely small (1–3 binaries max)
+* avoid filesystem traversal tools (`find`, etc.)
+* avoid interpreters (`python`, `node`, etc.)
+* consider disabling this action unless necessary
 
 ---
 
