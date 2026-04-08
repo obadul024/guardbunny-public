@@ -1,0 +1,28 @@
+# safe_http_fetch.gb
+# Fetches data from an allowlisted API endpoint and emits the response.
+# Requires http.fetch in policy with the target host in allowed_hosts.
+
+version: "1.0"
+name: "safe_http_fetch"
+
+input:
+  url:
+    type: string
+    description: "URL to fetch. Host must be in policy allowed_hosts."
+
+output:
+  status_code:
+    type: integer
+  body:
+    type: object
+
+steps:
+  - id: fetch
+    do:
+      action: http.fetch
+      args:
+        url: "${input.url}"
+        method: GET
+    emit:
+      status_code: "${steps.fetch.result.status_code}"
+      body: "${steps.fetch.result.body}"

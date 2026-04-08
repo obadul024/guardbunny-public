@@ -1,0 +1,16 @@
+name: safe_write_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: write_file
+    do:
+      action: file.write
+      args:
+        path: /tmp/guardbunny/out_test1.txt
+        content: "${input.content}"
+    emit:
+      bytes_written: "${steps.write_file.result.bytes_written}"
+      path: "${steps.write_file.result.path}"

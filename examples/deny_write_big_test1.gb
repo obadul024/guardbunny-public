@@ -1,0 +1,13 @@
+name: deny_write_big_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: write_file
+    do:
+      action: file.write
+      args:
+        path: /tmp/guardbunny/too_big.txt
+        content: "${input.content}"

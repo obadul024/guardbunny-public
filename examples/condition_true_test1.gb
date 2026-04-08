@@ -1,0 +1,28 @@
+name: condition_true_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: branch
+    condition:
+      test: input.flag == True
+      then:
+        - id: yes_write
+          do:
+            action: file.write
+            args:
+              path: /tmp/guardbunny/cond_yes.txt
+              content: "yes"
+          emit:
+            branch_taken: "then"
+      else:
+        - id: no_write
+          do:
+            action: file.write
+            args:
+              path: /tmp/guardbunny/cond_no.txt
+              content: "no"
+          emit:
+            branch_taken: "else"

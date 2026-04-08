@@ -1,0 +1,19 @@
+name: deny_binary_not_allowed_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: bad
+    do:
+      action: process.run_allowed
+      args:
+        binary: /usr/bin/grep
+        argv:
+            - root
+            - /etc/passwd
+
+
+
+

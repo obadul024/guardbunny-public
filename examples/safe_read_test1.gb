@@ -1,0 +1,14 @@
+name: safe_read_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: read_file
+    do:
+      action: file.read
+      args:
+        path: /tmp/guardbunny/test.txt
+    emit:
+      content: "${steps.read_file.result.content}"

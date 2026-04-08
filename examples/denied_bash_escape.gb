@@ -1,0 +1,26 @@
+# denied_bash_escape.gb
+#
+# Demonstrates that shell escape attempts are permanently blocked.
+# This workflow will ALWAYS be denied regardless of policy configuration.
+#
+# Shell binaries (bash, sh, zsh, dash, fish, etc.) are hard-blocked in
+# the policy engine. No policy file can enable them. The deny happens
+# before the executor is ever called.
+#
+# The policy decision is logged with code=SHELL_BINARY_DENIED so that
+# the attempt is visible in the audit trail.
+
+version: "1.0"
+name: "denied_bash_escape"
+
+input: {}
+output: {}
+
+steps:
+  - id: attempt_shell_escape
+    do:
+      action: process.run_allowed
+      args:
+        binary: /bin/bash
+        argv: ["-c", "cat /etc/passwd"]
+    emit: {}

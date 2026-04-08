@@ -1,0 +1,18 @@
+name: repeat_read_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: loop_read
+    repeat:
+      times: 3
+      do:
+        action: file.read
+        args:
+          path: /tmp/guardbunny/test.txt
+    emit:
+      reads:
+        merge: append
+        value: "${result.content}"

@@ -1,0 +1,13 @@
+name: http_bad_host_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: fetch
+    do:
+      action: http.fetch
+      args:
+        url: https://google.com
+        method: GET

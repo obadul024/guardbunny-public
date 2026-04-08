@@ -1,0 +1,32 @@
+allowed_actions:
+  - file.read
+  - file.write
+  - http.fetch
+  - process.run_allowed
+
+file_read:
+  allowed_roots:
+    - /tmp/guardbunny
+
+file_write:
+  enabled: true
+  allowed_roots:
+    - /tmp/guardbunny
+  max_bytes: 10000
+
+http_fetch:
+  allowed_hosts:
+    - example.com
+  allowed_methods:
+    - GET
+
+
+process_run:
+  allowed_binaries:
+    - /usr/bin/grep
+    - /usr/bin/head
+    - /usr/bin/wc
+    - process.args
+process_args:
+  allowed_args:
+    - help

@@ -1,0 +1,24 @@
+# safe_read.gb
+# Reads a file from the allowed workspace root and emits its content.
+# Requires file.read in policy with an allowed_root containing the target path.
+
+version: "1.0"
+name: "safe_read"
+
+input:
+  file_path:
+    type: string
+    description: "Path to the file to read, within the policy-allowed workspace."
+
+output:
+  content:
+    type: string
+
+steps:
+  - id: read_file
+    do:
+      action: file.read
+      args:
+        path: "${input.file_path}"
+    emit:
+      content: "${steps.read_file.result.content}"

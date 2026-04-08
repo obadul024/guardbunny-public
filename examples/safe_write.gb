@@ -1,0 +1,28 @@
+# safe_write.gb
+# Writes content to a file within the allowed workspace.
+# Requires file.write in policy with enabled: true and an allowed_root.
+
+version: "1.0"
+name: "safe_write"
+
+input:
+  file_path:
+    type: string
+    description: "Destination path within the policy-allowed workspace."
+  content:
+    type: string
+    description: "Text content to write."
+
+output:
+  bytes_written:
+    type: integer
+
+steps:
+  - id: write_file
+    do:
+      action: file.write
+      args:
+        path: "${input.file_path}"
+        content: "${input.content}"
+    emit:
+      bytes_written: "${steps.write_file.result.bytes_written}"

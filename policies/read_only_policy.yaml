@@ -1,0 +1,26 @@
+# GuardBunny read-only policy
+#
+# Permits only file reads and HTTP GETs. No writes, no process execution.
+# Use this policy for workflows that only need to observe, not modify.
+
+version: "1.0"
+
+allowed_actions:
+  - file.read
+  - http.fetch
+
+file_read:
+  allowed_roots:
+    - /tmp/guardbunny/workspace
+
+# file.write is NOT in allowed_actions — any file.write attempt is denied.
+
+http_fetch:
+  allowed_hosts:
+    - api.example.com
+    - "*.example.com"
+  allowed_methods:
+    - GET
+  timeout_sec: 15
+
+# process.run_allowed is NOT in allowed_actions.

@@ -1,0 +1,59 @@
+# GuardBunny default policy
+#
+# Default deny: only action types listed in allowed_actions are permitted.
+# Every other action is blocked before any per-action check runs.
+#
+# This policy is suitable for a single-tenant deployment writing to a
+# sandboxed workspace directory.
+
+version: "1.0"
+
+# ── Action type allowlist ─────────────────────────────────────────────────────
+# Remove any line to permanently deny that action type.
+allowed_actions:
+  - file.read
+  - file.write
+  - http.fetch
+  - process.run_allowed
+
+# ── file.read ─────────────────────────────────────────────────────────────────
+file_read:
+  # Absolute paths only. Paths are resolved before comparison.
+  # Path traversal (../../etc/passwd) will resolve outside these roots and be denied.
+  allowed_roots:
+    - /tmp/guardbunny/workspace
+    - /tmp/guardbunny
+
+# ── file.write ────────────────────────────────────────────────────────────────
+file_write:
+  enabled: true
+  allowed_roots:
+    - /tmp/guardbunny/workspace
+    - /tmp/guardbunny
+  max_bytes: 524288  # 512 KB per write
+
+# ── http.fetch ────────────────────────────────────────────────────────────────
+http_fetch:
+  allowed_hosts:
+    - example.com
+    - api.example.com
+    - "*.example.com"
+  allowed_methods:
+    - GET
+    - POST
+  timeout_sec: 30
+
+# ── process.run_allowed ───────────────────────────────────────────────────────
+# Only explicitly listed binary paths are permitted.
+# Shell binaries (bash, sh, zsh, etc.) are ALWAYS denied regardless of this list.
+# Interpreters (python, node, perl, etc.) with -c/-e flags are ALWAYS denied.
+#
+# RESIDUAL RISK: The executor does not restrict argv content. A binary like
+# /usr/bin/grep can read files outside the workspace if passed an unrestricted
+# path argument. Add argv_restrictions in a future policy revision.
+process_run:
+  allowed_binaries:
+    - /usr/bin/grep
+    - /usr/bin/wc
+    - /usr/bin/head
+    - /usr/bin/tail

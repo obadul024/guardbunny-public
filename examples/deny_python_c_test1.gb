@@ -1,0 +1,15 @@
+name: deny_python_c_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: bad
+    do:
+      action: process.run_allowed
+      args:
+        binary: python3
+        argv:
+          - -c
+          - "print('owned')"

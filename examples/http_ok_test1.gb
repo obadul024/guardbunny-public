@@ -1,0 +1,15 @@
+name: http_ok_test1
+version: "1.0"
+
+input: {}
+output: {}
+
+steps:
+  - id: fetch
+    do:
+      action: http.fetch
+      args:
+        url: https://example.com
+        method: GET
+    emit:
+      status: "${steps.fetch.result.status_code}"
