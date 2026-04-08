@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" width="120"/>
+</p>
+
 # GuardBunny
 
 **A policy-gated execution runtime for LLM-generated plans.**
