@@ -1,88 +1,86 @@
 # GuardBunny
 
-**A secure execution gateway for LLM-generated plans.**
+**A policy-gated execution runtime for LLM-generated plans.**
 
-GuardBunny bridges the gap between what an LLM proposes and what actually runs on your system. It treats every LLM-produced plan as untrusted input, normalizes it into typed actions, checks each action against a policy, and executes only what is explicitly allowed.
+GuardBunny sits between an LLM and your system.
+It treats every plan as untrusted input, converts it into typed actions, checks each action against a policy, and executes only what is explicitly allowed.
+
+> GuardBunny enforces policy constraints but is **NOT a hardened sandbox**.
+> It reduces risk compared to direct LLM execution, but does not eliminate it.
 
 ---
 
 ## What GuardBunny Is
 
-- A **bounded execution runtime** — supports exactly four action types, nothing more
-- A **typed action gateway** — every action is a typed IR object, not a free-form string
-- A **policy-enforced planner/executor bridge** — default deny, every decision logged
+* A **bounded execution runtime**
+* A **typed action gateway (no free-form shell)**
+* A **policy-enforced planner/executor boundary**
 
 ## What GuardBunny Is NOT
 
-- Not a general prompt language
-- Not a general-purpose programming language
-- Not a broad agent framework
-- Not a shell wrapper with safety theater around it
+* Not a general-purpose programming language
+* Not a prompt language
+* Not a full agent framework
+* Not a secure sandbox
+* Not a guarantee of safety
 
 ---
 
-## Trust Boundary
+## Core Model
 
 ```text
 LLM / plan text (UNTRUSTED)
         │
         ▼
-    [ parser ]         structural validation
+    parser → AST → IR
         │
         ▼
-     [ AST ]           unresolved, typed
+  policy engine (default deny)
         │
         ▼
-  [ IR normalizer ]    interpolation resolved at runtime
+    executor (no shell)
         │
         ▼
-  [ policy engine ]    default deny — every action authorized here
-        │
-        ▼
-    [ executor ]       I/O happens here, never with shell=True
-        │
-        ▼
-   [ audit log ]       every proposal, decision, and result recorded
-        │
-        ▼
- structured result
+     audit log
 ```
 
-The LLM is a **planner only**. The runtime is **authoritative**.
+**Key rule:**
+
+> The LLM suggests. The runtime decides.
 
 ---
 
-## Supported Action Types
+## Supported Actions (MVP)
 
-| Action | What it does |
-| ------ | ------------ |
-| `file.read` | Read a file from an allowlisted root |
-| `file.write` | Write a file to an allowlisted root |
-| `http.fetch` | HTTP request to an allowlisted host |
-| `process.run_allowed` | Run an explicitly allowlisted binary (no shell) |
-
-Shell execution (`bash`, `sh`, etc.) is **permanently blocked**. No policy can enable it.
+| Action                | Description                             |
+| --------------------- | --------------------------------------- |
+| `file.read`           | Read file within allowed roots          |
+| `file.write`          | Write file within allowed roots         |
+| `http.fetch`          | HTTP request to allowed hosts           |
+| `process.run_allowed` | Run allowlisted binaries (strict rules) |
 
 ---
 
 ## Quickstart
 
 ```bash
-# Install
 pip install -e ".[dev]"
 
-# Create a workspace
-mkdir -p /tmp/guardbunny/workspace
-echo "hello from workspace" > /tmp/guardbunny/workspace/hello.txt
+mkdir -p /tmp/guardbunny
+echo "hello world" > /tmp/guardbunny/test.txt
+```
 
-# Run the safe_read example
-guardbunny examples/safe_read.gb \
-    --policy policies/default_policy.yaml \
-    --input /dev/stdin <<'EOF'
-{"file_path": "/tmp/guardbunny/workspace/hello.txt"}
-EOF
+Run:
 
-# Run tests
+```bash
+guardbunny run examples/safe_read.gb \
+  --policy policies/default_policy.yaml \
+  --input '{"file_path": "/tmp/guardbunny/test.txt"}'
+```
+
+Run tests:
+
+```bash
 pytest tests/ -v
 ```
 
@@ -91,16 +89,11 @@ pytest tests/ -v
 ## Example Workflow
 
 ```yaml
-# examples/safe_read.gb
 version: "1.0"
 name: "safe_read"
 
 input:
   file_path:
-    type: string
-
-output:
-  content:
     type: string
 
 steps:
@@ -113,66 +106,131 @@ steps:
       content: "${steps.read_file.result.content}"
 ```
 
-Run it:
+---
 
-```bash
-guardbunny examples/safe_read.gb \
-    --policy policies/default_policy.yaml \
-    --input inputs.json
-```
+## What GuardBunny Actually Enforces
 
-Output:
+These guarantees are backed by the current implementation:
 
-```json
-{
-  "status": "success",
-  "output": {"content": "hello from workspace"},
-  "errors": [],
-  "steps_executed": 1,
-  "audit": [...]
-}
-```
+* No `shell=True`
+* No arbitrary shell execution
+* No interpreter inline code (`python -c`, `bash -c`, etc.)
+* Default-deny policy
+* Per-step authorization
+* Policy re-check on every loop iteration and condition branch
+* Output size limits
+* Execution timeouts (process + HTTP)
+* Structured audit logging for every step
 
 ---
 
-## What GuardBunny Protects Against
+## What It Partially Enforces
 
-- **Prompt injection**: The LLM cannot inject arbitrary shell commands
-- **Path traversal**: `../../etc/passwd` resolves outside the allowed root and is denied
-- **Network exfiltration**: Only hosts in `allowed_hosts` can be reached
-- **Shell escape**: Shell binaries and interpreter code-execution flags are hard-blocked
-- **Interpreter escape**: `python -c`, `node -e`, `perl -e`, etc. are hard-blocked
-- **Unchecked loops**: Repeat loops are capped and re-authorized every iteration
-- **Implicit authorization**: Every step is independently authorized before execution
+These protections exist but are not complete:
 
-## What GuardBunny Does NOT Protect Against
+* File path safety (TOCTOU race possible)
+* Binary safety depends on policy quality
+* Network safety limited to host allowlists
+* Minimal condition expression safety
 
-- **argv content in process.run_allowed**: An allowlisted binary like `/usr/bin/grep` can be given a path argument that reads outside the workspace. Future work: per-binary argv restriction rules.
-- **SSRF via allowed hosts**: If an allowlisted host acts as a proxy, GuardBunny cannot see the second hop.
-- **Symlink attacks**: The policy resolves paths at check time; the executor resolves again at read time. A symlink swap between these two moments is a TOCTOU window.
-- **Sandbox escape**: GuardBunny does not use OS-level sandboxing (seccomp, namespaces). A future integration point for these is marked with TODO in the source.
-- **Malicious content in file output**: GuardBunny does not inspect the semantic content of files it reads or writes.
+---
 
-See [docs/threat-model.md](docs/threat-model.md) for the full threat model.
+## What It Does NOT Protect Against
+
+* **Malicious argv in allowed binaries**
+  Example: `/usr/bin/grep` can read unintended files
+
+* **Symlink race conditions (TOCTOU)**
+  Path may change between policy check and execution
+
+* **SSRF via allowed hosts**
+  GuardBunny cannot see beyond first-hop requests
+
+* **OS-level escape**
+  No container, namespace, or seccomp isolation yet
+
+* **Malicious file contents**
+  No inspection of data being read or written
+
+---
+
+## Critical Warning: process.run_allowed
+
+This is the primary remaining attack surface.
+
+Even with allowlisted binaries:
+
+* arguments are fully controlled by the caller
+* many standard binaries expose powerful behaviors
+
+---
+
+## Safe Usage Guidelines
+
+* Treat all workflows as **untrusted input**
+* Keep policy strict and minimal
+* Prefer `file.*` and `http.fetch` over `process.run_allowed`
+* Use small, controlled workspaces
+* Inspect audit logs for every run
+* Do not expose GuardBunny directly to untrusted users without additional isolation
+
+---
+
+## Current Limitations
+
+* Input schema is parsed but **not enforced yet**
+* Output schema is **not validated yet**
+* No static validation CLI
+* No OS-level sandbox
+* Minimal DSL by design
 
 ---
 
 ## Repository Layout
 
 ```text
-guardbunny/          Python package — the secure runtime
-  models.py          Core data types (IRStep, PolicyDecision, RuntimeState, …)
-  parser.py          .gb YAML → WorkflowSpec AST
-  ir.py              AST + runtime state → typed IRStep
-  conditions.py      Restricted boolean expression evaluator (no eval())
-  policy.py          YAML-backed policy engine (default deny)
-  executor.py        Typed action execution (no shell=True)
-  audit.py           Append-only per-run audit log
-  runtime.py         Orchestrator: parse → IR → policy → execute → audit
-  cli.py             CLI entry point
-policies/            Example policy YAML files
-examples/            Example .gb workflow files
-tests/               pytest test suite
-docs/                Architecture, threat model, DSL reference, security notes
-legacy/              Original ProLang prototype (preserved, not authoritative)
+guardbunny/
+  parser.py
+  ir.py
+  policy.py
+  executor.py
+  runtime.py
+  audit.py
+  cli.py
+
+policies/
+examples/
+tests/
+docs/
+legacy/
 ```
+
+---
+
+## Roadmap (practical)
+
+Near-term:
+
+* input/output schema enforcement
+* static validation CLI
+* tighter argv restrictions
+* improved audit detail
+
+Mid-term:
+
+* container / namespace isolation
+* stricter filesystem model
+* per-binary argument policies
+
+---
+
+## One-line summary
+
+> GuardBunny makes LLM actions explicit, auditable, and policy-controlled — safer than raw execution, but not a complete security boundary.
+
+---
+
+## Status
+
+Early-stage but functional.
+Suitable for experimentation and controlled environments, not production-critical systems.
