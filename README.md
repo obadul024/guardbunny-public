@@ -42,27 +42,31 @@ Think of it as a control layer between an LLM/agent and your system.
 ---
 
 
-## Architecture
-![GuardBunny Architecture](docs/architecture.png)
-
-
 ## Core Model
+<p align="center">
+  <img src="./docs/Architecture.png" width="420"/>
+</p>
 
-```text
-LLM / plan text (UNTRUSTED)
-        │
-        ▼
-    parser → AST → IR
-        │
-        ▼
-  policy engine (default deny)
-        │
-        ▼
-    executor (no shell)
-        │
-        ▼
-     audit log
-```
+## Trust Boundary
+
+<p align="center">
+  <img src="./docs/TrustBoundary.png" width="420"/>
+</p>
+
+## Core Workflow
+
+
+
+![GuardBunny Architecture](docs/workflow.png)
+
+## Attack Flow
+
+<p align="center">
+  <img src="docs/Attackflow3.png" width="420"/>
+</p>
+
+
+
 
 **Key rule:**
 
