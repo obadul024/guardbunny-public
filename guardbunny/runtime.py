@@ -19,7 +19,15 @@ Key security invariants enforced here:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
+
+try:
+    from jsonschema import SchemaError, ValidationError, validate
+except Exception:  # pragma: no cover
+    SchemaError = Exception  # type: ignore[assignment]
+    ValidationError = Exception  # type: ignore[assignment]
+    validate = None  # type: ignore[assignment]
 
 from .audit import AuditLog
 from .conditions import ConditionError, evaluate_condition
@@ -91,6 +99,17 @@ class Runtime:
                 errors=[f"ParseError: {exc}"],
             )
 
+        input_validation_error = _validate_schema(
+            spec.input_schema, inputs, schema_kind="input"
+        )
+        if input_validation_error is not None:
+            return WorkflowResult(
+                status="failed",
+                output={},
+                audit=audit.to_list(),
+                errors=[input_validation_error],
+            )
+
         state = RuntimeState(input=inputs)
         step_count = 0
 
@@ -121,9 +140,22 @@ class Runtime:
                 step_count=step_count,
             )
 
+        output = dict(state.emit)
+        output_validation_error = _validate_schema(
+            spec.output_schema, output, schema_kind="output"
+        )
+        if output_validation_error is not None:
+            return WorkflowResult(
+                status="failed",
+                output={},
+                audit=audit.to_list(),
+                errors=[output_validation_error],
+                step_count=step_count,
+            )
+
         return WorkflowResult(
             status="success",
-            output=dict(state.emit),
+            output=output,
             audit=audit.to_list(),
             errors=[],
             step_count=step_count,
@@ -148,7 +180,11 @@ class Runtime:
     def _execute_do(
         self, step: DoStep, state: RuntimeState, audit: AuditLog
     ) -> None:
-        ir_step = normalize_do_step(step.id, step.action, state)
+        try:
+            ir_step = normalize_do_step(step.id, step.action, state)
+        except IRError as exc:
+            audit.record_runtime_error(step.id, "normalize_do", str(exc))
+            raise
 
         args_summary = _summarize_args(ir_step)
         record = audit.record_proposal(step.id, ir_step.action_type.value, args_summary)
@@ -160,6 +196,11 @@ class Runtime:
         if not decision.allowed:
             raise PolicyDeniedError(step.id, decision)
 
+        effective_constraints = self._policy.constraints_for(
+            ir_step.action_type, ir_step.constraints
+        )
+        ir_step = replace(ir_step, constraints=effective_constraints)
+
         result = self._executor.execute(ir_step)
         audit.record_result(record, result)
 
@@ -169,13 +210,34 @@ class Runtime:
         # Record result in state BEFORE resolving emit so that
         # ${steps.step_id.result.key} works in the emit clause.
         state.steps[step.id] = result
-        resolved_emit = resolve_emit(step.emit, state, result.data)
+        try:
+            resolved_emit = resolve_emit(step.emit, state, result.data)
+        except IRError as exc:
+            audit.record_runtime_error(step.id, "resolve_emit", str(exc))
+            raise
         _apply_emit(resolved_emit, state)
 
     def _execute_condition(
         self, step: ConditionStep, state: RuntimeState, audit: AuditLog
     ) -> None:
-        ok = evaluate_condition(step.test, state)
+        try:
+            ok = evaluate_condition(step.test, state)
+        except ConditionError as exc:
+            audit.record_condition(
+                step_id=step.id,
+                test=step.test,
+                evaluated_result=None,
+                branch_taken="error",
+                error=str(exc),
+            )
+            raise
+
+        audit.record_condition(
+            step_id=step.id,
+            test=step.test,
+            evaluated_result=ok,
+            branch_taken="then" if ok else "else",
+        )
         branch = step.then_steps if ok else step.else_steps
         # Policy is re-checked for every sub-step in the taken branch.
         for sub_step in branch:
@@ -184,18 +246,27 @@ class Runtime:
     def _execute_repeat(
         self, step: RepeatStep, state: RuntimeState, audit: AuditLog
     ) -> None:
-        times = resolve_times(step.times, state)
+        try:
+            times = resolve_times(step.times, state)
+        except IRError as exc:
+            audit.record_runtime_error(step.id, "resolve_times", str(exc))
+            raise
         times = min(times, _MAX_ITERATIONS)
 
         for i in range(1, times + 1):
             # Make loop.index available to interpolations inside the action args.
             state.vars["loop"] = {"index": i}
 
-            ir_step = normalize_repeat_action(step.id, step.action, state, i)
+            loop_step_id = f"{step.id}[{i}]"
+            try:
+                ir_step = normalize_repeat_action(step.id, step.action, state, i)
+            except IRError as exc:
+                audit.record_runtime_error(loop_step_id, "normalize_repeat", str(exc))
+                raise
 
             args_summary = _summarize_args(ir_step)
             record = audit.record_proposal(
-                f"{step.id}[{i}]", ir_step.action_type.value, args_summary
+                loop_step_id, ir_step.action_type.value, args_summary
             )
 
             # Policy is re-checked on EVERY iteration — not once for the loop.
@@ -203,8 +274,12 @@ class Runtime:
             audit.record_decision(record, decision)
 
             if not decision.allowed:
-                raise PolicyDeniedError(f"{step.id}[{i}]", decision)
+                raise PolicyDeniedError(loop_step_id, decision)
 
+            effective_constraints = self._policy.constraints_for(
+                ir_step.action_type, ir_step.constraints
+            )
+            ir_step = replace(ir_step, constraints=effective_constraints)
             result = self._executor.execute(ir_step)
             audit.record_result(record, result)
 
@@ -214,7 +289,11 @@ class Runtime:
                 )
 
             state.steps[step.id] = result
-            resolved_emit = resolve_emit(step.emit, state, result.data)
+            try:
+                resolved_emit = resolve_emit(step.emit, state, result.data)
+            except IRError as exc:
+                audit.record_runtime_error(loop_step_id, "resolve_emit", str(exc))
+                raise
             _apply_emit(resolved_emit, state)
 
         # Clean up the loop variable after the repeat finishes.
@@ -264,3 +343,43 @@ def _summarize_args(ir_step: IRStep) -> dict[str, Any]:
     if isinstance(args, ProcessRunArgs):
         return {"binary": args.binary, "argv": list(args.argv)}
     return {}  # pragma: no cover
+
+
+def _validate_schema(
+    schema_mapping: dict[str, Any],
+    instance: dict[str, Any],
+    schema_kind: str,
+) -> str | None:
+    """
+    Validate workflow input/output using a lightweight schema shape.
+
+    Accepted schema forms:
+      1) Full JSON Schema object (contains top-level 'type').
+      2) Shorthand mapping: {field: {type: ...}, ...}
+    """
+    if not schema_mapping:
+        return None
+
+    if "type" in schema_mapping:
+        schema = schema_mapping
+    else:
+        schema = {
+            "type": "object",
+            "properties": schema_mapping,
+            "required": sorted(schema_mapping.keys()),
+            "additionalProperties": True,
+        }
+
+    if validate is None:
+        return (
+            f"{schema_kind.title()}SchemaValidationError: jsonschema dependency is not "
+            "available."
+        )
+
+    try:
+        validate(instance=instance, schema=schema)
+    except ValidationError as exc:
+        return f"{schema_kind.title()}SchemaValidationError: {exc.message}"
+    except SchemaError as exc:
+        return f"{schema_kind.title()}SchemaDefinitionError: {exc.message}"
+    return None

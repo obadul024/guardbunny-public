@@ -42,6 +42,7 @@ http_fetch:
     - GET
     - POST
   timeout_sec: 30
+  max_output_bytes: 65536
 
 # ── process.run_allowed ───────────────────────────────────────────────────────
 # Only explicitly listed binary paths are permitted.
@@ -56,4 +57,27 @@ process_run:
     - /usr/bin/grep
     - /usr/bin/wc
     - /usr/bin/head
-    - /usr/bin/tail
+  timeout_sec: 30
+  max_output_bytes: 65536
+
+process_run_rules:
+  /usr/bin/grep:
+    allowed_flags: ["-i", "-n", "-F", "-E", "-e"]
+    max_argv: 8
+    file_operand_mode: "all_non_flag_after_pattern"
+    allowed_file_roots:
+      - /tmp/guardbunny
+
+  /usr/bin/head:
+    allowed_flags: ["-n", "-q", "-v"]
+    max_argv: 8
+    file_operand_mode: "all_non_flag"
+    allowed_file_roots:
+      - /tmp/guardbunny
+
+  /usr/bin/wc:
+    allowed_flags: ["-l", "-w", "-c", "-m"]
+    max_argv: 8
+    file_operand_mode: "all_non_flag"
+    allowed_file_roots:
+      - /tmp/guardbunny

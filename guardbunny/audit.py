@@ -23,7 +23,7 @@ class AuditLog:
     """Append-only audit log for one workflow run."""
 
     def __init__(self) -> None:
-        self._records: list[AuditRecord] = []
+        self._records: list[AuditRecord | dict[str, Any]] = []
 
     def record_proposal(
         self,
@@ -59,9 +59,44 @@ class AuditLog:
         record.result_success = result.success
         record.result_error = result.error
 
+    def record_condition(
+        self,
+        step_id: str,
+        test: str,
+        evaluated_result: bool | None,
+        branch_taken: str,
+        error: str | None = None,
+    ) -> None:
+        self._records.append(
+            {
+                "event": "condition_evaluation",
+                "step_id": step_id,
+                "test": test,
+                "evaluated_result": evaluated_result,
+                "branch_taken": branch_taken,
+                "error": error,
+            }
+        )
+
+    def record_runtime_error(self, step_id: str, phase: str, error: str) -> None:
+        self._records.append(
+            {
+                "event": "runtime_error",
+                "step_id": step_id,
+                "phase": phase,
+                "error": error,
+            }
+        )
+
     def to_list(self) -> list[dict[str, Any]]:
         """Serialize all records to a list of plain dicts for JSON output."""
-        return [_serialize(r) for r in self._records]
+        out: list[dict[str, Any]] = []
+        for record in self._records:
+            if isinstance(record, AuditRecord):
+                out.append(_serialize(record))
+            else:
+                out.append(record)
+        return out
 
 
 def _serialize(record: AuditRecord) -> dict[str, Any]:

@@ -2,7 +2,7 @@
 GuardBunny CLI entry point.
 
 Usage:
-  guardbunny <workflow.gb> --policy <policy.yaml> --input <inputs.json>
+  guardbunny <workflow.gb> --policy <policy.yaml> [--input <inputs.json>]
 
 The CLI is a thin wrapper around Runtime.run(). It loads files, runs the
 workflow, prints structured JSON output, and exits non-zero on failure or deny.
@@ -33,7 +33,7 @@ def main() -> None:
         "--policy", required=True, help="Path to policy YAML file (required)."
     )
     ap.add_argument(
-        "--input", required=False, help="Path to JSON inputs file (required)."
+        "--input", required=False, help="Path to JSON inputs file (optional)."
     )
     ap.add_argument(
         "--output-format",
@@ -53,14 +53,19 @@ def main() -> None:
     except (FileNotFoundError, OSError) as exc:
         _die(f"Cannot read workflow '{args.workflow}': {exc}")
 
-    try:
-        inputs = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        _die(f"Cannot find inputs file '{args.input}': {exc}")
-    except OSError as exc:
-        _die(f"Cannot read inputs file '{args.input}': {exc}")
-    except json.JSONDecodeError as exc:
-        _die(f"Inputs file '{args.input}' is not valid JSON: {exc}")
+    inputs: dict = {}
+    if args.input:
+        try:
+            loaded = json.loads(Path(args.input).read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                _die("Inputs JSON must be an object at the top level.")
+            inputs = loaded
+        except FileNotFoundError as exc:
+            _die(f"Cannot find inputs file '{args.input}': {exc}")
+        except OSError as exc:
+            _die(f"Cannot read inputs file '{args.input}': {exc}")
+        except json.JSONDecodeError as exc:
+            _die(f"Inputs file '{args.input}' is not valid JSON: {exc}")
 
     runtime = Runtime(policy=policy)
     result = runtime.run(workflow_text, inputs)

@@ -52,6 +52,14 @@ def _full_policy(tmp_path: Path, workspace: Path) -> Policy:
                 "allowed_methods": ["GET"],
             },
             "process_run": {"allowed_binaries": ["/usr/bin/grep"]},
+            "process_run_rules": {
+                "/usr/bin/grep": {
+                    "allowed_flags": ["-i", "-n", "-F", "-E", "-e"],
+                    "max_argv": 8,
+                    "file_operand_mode": "all_non_flag_after_pattern",
+                    "allowed_file_roots": [str(workspace)],
+                }
+            },
         },
         tmp_path,
     )

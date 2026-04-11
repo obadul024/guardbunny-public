@@ -1,5 +1,6 @@
 """Tests for guardbunny.executor — actual I/O execution."""
 
+import io
 import json
 import subprocess
 from pathlib import Path
@@ -117,7 +118,7 @@ def _make_mock_response(status: int, body: bytes, content_type: str = "applicati
 
 def test_http_fetch_returns_json_body(executor: Executor):
     body = json.dumps({"key": "value"}).encode()
-    with patch("urllib.request.urlopen", return_value=_make_mock_response(200, body)):
+    with patch.object(executor._http_opener, "open", return_value=_make_mock_response(200, body)):
         ir = _make_ir(
             ActionType.HTTP_FETCH,
             HttpFetchArgs(url="https://api.example.com/data", method="GET"),
@@ -130,8 +131,9 @@ def test_http_fetch_returns_json_body(executor: Executor):
 
 def test_http_fetch_returns_text_body(executor: Executor):
     body = b"plain text response"
-    with patch(
-        "urllib.request.urlopen",
+    with patch.object(
+        executor._http_opener,
+        "open",
         return_value=_make_mock_response(200, body, content_type="text/plain"),
     ):
         ir = _make_ir(
@@ -145,7 +147,7 @@ def test_http_fetch_returns_text_body(executor: Executor):
 def test_http_fetch_enforces_max_output_bytes(executor: Executor):
     big_body = b"x" * 200
     constraints = Constraints(timeout_sec=30, max_output_bytes=100)
-    with patch("urllib.request.urlopen", return_value=_make_mock_response(200, big_body)):
+    with patch.object(executor._http_opener, "open", return_value=_make_mock_response(200, big_body)):
         ir = _make_ir(
             ActionType.HTTP_FETCH,
             HttpFetchArgs(url="https://api.example.com/data", method="GET"),
@@ -157,9 +159,8 @@ def test_http_fetch_enforces_max_output_bytes(executor: Executor):
 
 def test_http_fetch_network_error(executor: Executor):
     import urllib.error
-    with patch(
-        "urllib.request.urlopen",
-        side_effect=urllib.error.URLError("connection refused"),
+    with patch.object(
+        executor._http_opener, "open", side_effect=urllib.error.URLError("connection refused")
     ):
         ir = _make_ir(
             ActionType.HTTP_FETCH,
@@ -167,6 +168,29 @@ def test_http_fetch_network_error(executor: Executor):
         )
         with pytest.raises(ExecutorError, match="network error"):
             executor.execute(ir)
+
+
+def test_http_fetch_redirect_not_followed(executor: Executor):
+    import urllib.error
+
+    with patch.object(
+        executor._http_opener,
+        "open",
+        side_effect=urllib.error.HTTPError(
+            url="https://api.example.com/data",
+            code=302,
+            msg="Found",
+            hdrs={},
+            fp=io.BytesIO(b"redirect"),
+        ),
+    ):
+        ir = _make_ir(
+            ActionType.HTTP_FETCH,
+            HttpFetchArgs(url="https://api.example.com/data", method="GET"),
+        )
+        result = executor.execute(ir)
+    assert result.success is True
+    assert result.data["status_code"] == 302
 
 
 # ── process.run_allowed ───────────────────────────────────────────────────────
@@ -241,6 +265,24 @@ def test_process_run_enforces_output_size(executor: Executor):
             constraints,
         )
         with pytest.raises(ExecutorError, match="max_output_bytes"):
+            executor.execute(ir)
+
+
+def test_process_run_enforces_stderr_size(executor: Executor):
+    big_stderr = b"e" * 200
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = b"ok"
+    mock_proc.stderr = big_stderr
+
+    constraints = Constraints(timeout_sec=30, max_output_bytes=100)
+    with patch("subprocess.run", return_value=mock_proc):
+        ir = _make_ir(
+            ActionType.PROCESS_RUN,
+            ProcessRunArgs(binary="/usr/bin/grep", argv=("x", "/workspace/f.txt")),
+            constraints,
+        )
+        with pytest.raises(ExecutorError, match="stderr"):
             executor.execute(ir)
 
 

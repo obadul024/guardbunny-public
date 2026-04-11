@@ -51,8 +51,18 @@ class ExecutorError(Exception):
     """Raised when step execution fails for an operational reason."""
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Disable automatic HTTP redirect following."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        return None
+
+
 class Executor:
     """Executes authorized IRStep objects and returns structured StepResult values."""
+
+    def __init__(self) -> None:
+        self._http_opener = urllib.request.build_opener(_NoRedirectHandler())
 
     def execute(self, ir_step: IRStep) -> StepResult:
         """
@@ -96,12 +106,18 @@ class Executor:
         if not path.is_file():
             raise ExecutorError(f"file.read: path is not a regular file: '{path}'.")
 
-        raw = path.read_bytes()
-        if len(raw) > constraints.max_output_bytes:
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ExecutorError(f"file.read: cannot stat file '{path}': {exc}") from exc
+
+        if size > constraints.max_output_bytes:
             raise ExecutorError(
-                f"file.read: file size {len(raw)} bytes exceeds "
+                f"file.read: file size {size} bytes exceeds "
                 f"max_output_bytes={constraints.max_output_bytes}."
             )
+
+        raw = path.read_bytes()
 
         content = raw.decode("utf-8", errors="replace")
         return {"content": content, "size_bytes": len(raw)}
@@ -146,7 +162,7 @@ class Executor:
                 req.add_header(k, v)
 
         try:
-            with urllib.request.urlopen(req, timeout=constraints.timeout_sec) as resp:
+            with self._http_opener.open(req, timeout=constraints.timeout_sec) as resp:
                 raw = resp.read(constraints.max_output_bytes + 1)
 
                 if len(raw) > constraints.max_output_bytes:
@@ -230,6 +246,11 @@ class Executor:
         if len(proc.stdout) > constraints.max_output_bytes:
             raise ExecutorError(
                 f"process.run_allowed: stdout ({len(proc.stdout)} bytes) exceeds "
+                f"max_output_bytes={constraints.max_output_bytes}."
+            )
+        if len(proc.stderr) > constraints.max_output_bytes:
+            raise ExecutorError(
+                f"process.run_allowed: stderr ({len(proc.stderr)} bytes) exceeds "
                 f"max_output_bytes={constraints.max_output_bytes}."
             )
 

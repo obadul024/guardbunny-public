@@ -68,6 +68,14 @@ def default_policy(tmp_path: Path, workspace: Path) -> Policy:
         "process_run": {
             "allowed_binaries": ["/usr/bin/grep"],
         },
+        "process_run_rules": {
+            "/usr/bin/grep": {
+                "allowed_flags": ["-i", "-n", "-F", "-E", "-e"],
+                "max_argv": 8,
+                "file_operand_mode": "all_non_flag_after_pattern",
+                "allowed_file_roots": [str(workspace)],
+            },
+        },
     }
     return _make_policy(cfg, tmp_path)
 
@@ -246,16 +254,50 @@ def test_http_fetch_wildcard_host_allowed(tmp_path: Path):
     assert d.allowed is True
 
 
+def test_http_fetch_denied_for_non_http_scheme(default_policy: Policy):
+    ir = _make_ir(
+        "s", ActionType.HTTP_FETCH,
+        HttpFetchArgs(url="file:///etc/passwd", method="GET"),
+    )
+    d = default_policy.check(ir)
+    assert d.allowed is False
+    assert d.code == "URL_SCHEME_NOT_ALLOWED"
+
+
 # ── process.run_allowed ───────────────────────────────────────────────────────
 
 
 def test_process_run_allowed_for_allowlisted_binary(default_policy: Policy):
+    # Explicitly denied because operand is outside configured allowed_file_roots.
     ir = _make_ir(
         "s", ActionType.PROCESS_RUN,
-        ProcessRunArgs(binary="/usr/bin/grep", argv=("needle", "/workspace/file.txt")),
+        ProcessRunArgs(binary="/usr/bin/grep", argv=("needle", "/tmp/file.txt")),
+    )
+    d = default_policy.check(ir)
+    assert d.allowed is False
+    assert d.code == "FILE_OPERAND_OUTSIDE_ALLOWED_ROOT"
+
+
+def test_process_run_denies_grep_etc_passwd(default_policy: Policy):
+    ir = _make_ir(
+        "s", ActionType.PROCESS_RUN,
+        ProcessRunArgs(binary="/usr/bin/grep", argv=("root", "/etc/passwd")),
+    )
+    d = default_policy.check(ir)
+    assert d.allowed is False
+    assert d.code == "FILE_OPERAND_OUTSIDE_ALLOWED_ROOT"
+
+
+def test_process_run_allows_grep_workspace_file(default_policy: Policy, workspace: Path):
+    target = workspace / "f.txt"
+    target.write_text("needle\n")
+    ir = _make_ir(
+        "s", ActionType.PROCESS_RUN,
+        ProcessRunArgs(binary="/usr/bin/grep", argv=("needle", str(target))),
     )
     d = default_policy.check(ir)
     assert d.allowed is True
+    assert d.code == "ACTION_ALLOWED"
 
 
 def test_process_run_denied_for_non_allowlisted_binary(default_policy: Policy):
@@ -336,6 +378,41 @@ def test_process_run_denied_no_binaries_configured(tmp_path: Path):
     d = policy.check(ir)
     assert d.allowed is False
     assert d.code == "NO_ALLOWED_BINARIES"
+
+
+def test_process_run_denied_when_rule_missing_for_allowlisted_binary(tmp_path: Path):
+    policy = _make_policy(
+        {
+            "allowed_actions": ["process.run_allowed"],
+            "process_run": {"allowed_binaries": ["/usr/bin/grep"]},
+            "process_run_rules": {},
+        },
+        tmp_path,
+    )
+    ir = _make_ir(
+        "s", ActionType.PROCESS_RUN,
+        ProcessRunArgs(binary="/usr/bin/grep", argv=("x", "/tmp/f.txt")),
+    )
+    d = policy.check(ir)
+    assert d.allowed is False
+    assert d.code == "PROCESS_RULE_MISSING"
+
+
+def test_process_run_denied_python_m(tmp_path: Path):
+    policy = _make_policy(
+        {
+            "allowed_actions": ["process.run_allowed"],
+            "process_run": {"allowed_binaries": ["/usr/bin/python3"]},
+        },
+        tmp_path,
+    )
+    ir = _make_ir(
+        "s", ActionType.PROCESS_RUN,
+        ProcessRunArgs(binary="/usr/bin/python3", argv=("-m", "http.server")),
+    )
+    d = policy.check(ir)
+    assert d.allowed is False
+    assert d.code == "INTERPRETER_CODE_FLAG_DENIED"
 
 
 # ── Policy file loading ───────────────────────────────────────────────────────

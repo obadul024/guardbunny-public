@@ -26,6 +26,7 @@ import yaml
 
 from .models import (
     ActionType,
+    Constraints,
     FileReadArgs,
     FileWriteArgs,
     HttpFetchArgs,
@@ -59,7 +60,7 @@ _INTERPRETER_BINARIES: frozenset[str] = frozenset({
 
 # Flags that let interpreters execute arbitrary code inline.
 _CODE_EXEC_FLAGS: frozenset[str] = frozenset({
-    "-c", "-e", "--eval", "--execute", "-exec", "--run",
+    "-c", "-e", "-m", "--eval", "--execute", "-exec", "--run",
 })
 
 
@@ -123,6 +124,48 @@ class Policy:
             allowed=False,
             code="UNHANDLED_ACTION_TYPE",
             reason=f"Action type '{action_type.value}' has no policy handler.",
+        )
+
+    def constraints_for(
+        self, action_type: ActionType, base: Constraints
+    ) -> Constraints:
+        """
+        Resolve execution constraints from policy with conservative fallbacks.
+
+        Precedence:
+          1) execution.* global overrides
+          2) per-action section overrides (file_read/http_fetch/process_run/...)
+          3) IR defaults (base)
+        """
+        timeout_sec = base.timeout_sec
+        max_output_bytes = base.max_output_bytes
+
+        execution_cfg = self._cfg.get("execution") or {}
+        timeout_sec = _maybe_override_positive_int(
+            timeout_sec, execution_cfg.get("timeout_sec")
+        )
+        max_output_bytes = _maybe_override_positive_int(
+            max_output_bytes, execution_cfg.get("max_output_bytes")
+        )
+
+        section_name = {
+            ActionType.FILE_READ: "file_read",
+            ActionType.FILE_WRITE: "file_write",
+            ActionType.HTTP_FETCH: "http_fetch",
+            ActionType.PROCESS_RUN: "process_run",
+        }[action_type]
+        section_cfg = self._cfg.get(section_name) or {}
+
+        timeout_sec = _maybe_override_positive_int(
+            timeout_sec, section_cfg.get("timeout_sec")
+        )
+        max_output_bytes = _maybe_override_positive_int(
+            max_output_bytes, section_cfg.get("max_output_bytes")
+        )
+
+        return Constraints(
+            timeout_sec=timeout_sec,
+            max_output_bytes=max_output_bytes,
         )
 
     # ── Per-action checks ────────────────────────────────────────────────────
@@ -241,10 +284,28 @@ class Policy:
             )
 
         parsed = urlparse(args.url)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in {"http", "https"}:
+            return PolicyDecision(
+                allowed=False,
+                code="URL_SCHEME_NOT_ALLOWED",
+                reason=(
+                    f"http.fetch: URL scheme '{scheme or '<empty>'}' is not allowed. "
+                    "Only http and https are permitted."
+                ),
+            )
+
         host = (parsed.netloc or parsed.hostname or "").lower()
         # Strip port from netloc if present.
         if ":" in host:
             host = host.split(":")[0]
+
+        if not host:
+            return PolicyDecision(
+                allowed=False,
+                code="URL_HOST_MISSING",
+                reason=f"http.fetch: URL '{args.url}' does not contain a valid host.",
+            )
 
         if not _host_matches(host, allowed_hosts):
             return PolicyDecision(
@@ -322,6 +383,22 @@ class Policy:
                 ),
             )
 
+        process_run_rules = self._cfg.get("process_run_rules") or {}
+        binary_rule = process_run_rules.get(args.binary)
+        if not isinstance(binary_rule, dict):
+            return PolicyDecision(
+                allowed=False,
+                code="PROCESS_RULE_MISSING",
+                reason=(
+                    f"process.run_allowed: binary '{args.binary}' is allowlisted but has "
+                    "no process_run_rules entry."
+                ),
+            )
+
+        argv_decision = _validate_process_argv(args.binary, args.argv, binary_rule)
+        if argv_decision is not None:
+            return argv_decision
+
         return PolicyDecision(
             allowed=True,
             code="ACTION_ALLOWED",
@@ -376,3 +453,155 @@ def _host_matches(host: str, allowed: list[str]) -> bool:
         elif p == host:
             return True
     return False
+
+
+def _maybe_override_positive_int(current: int, maybe_value: Any) -> int:
+    if isinstance(maybe_value, int) and maybe_value > 0:
+        return maybe_value
+    return current
+
+
+def _deny(code: str, reason: str) -> PolicyDecision:
+    return PolicyDecision(allowed=False, code=code, reason=reason)
+
+
+def _validate_process_argv(
+    binary: str,
+    argv: tuple[str, ...],
+    rule: dict[str, Any],
+) -> PolicyDecision | None:
+    allowed_flags = rule.get("allowed_flags")
+    if not isinstance(allowed_flags, list) or not all(
+        isinstance(x, str) and x.startswith("-") for x in allowed_flags
+    ):
+        return _deny(
+            "PROCESS_RULE_INVALID",
+            f"process.run_allowed: invalid allowed_flags for '{binary}'.",
+        )
+
+    max_argv = rule.get("max_argv")
+    if not isinstance(max_argv, int) or max_argv < 0:
+        return _deny(
+            "PROCESS_RULE_INVALID",
+            f"process.run_allowed: invalid max_argv for '{binary}'.",
+        )
+
+    mode = rule.get("file_operand_mode")
+    if mode not in {"all_non_flag", "all_non_flag_after_pattern"}:
+        return _deny(
+            "PROCESS_RULE_INVALID",
+            f"process.run_allowed: invalid file_operand_mode for '{binary}'.",
+        )
+
+    allowed_file_roots = rule.get("allowed_file_roots")
+    if not isinstance(allowed_file_roots, list) or not all(
+        isinstance(r, str) and r for r in allowed_file_roots
+    ):
+        return _deny(
+            "PROCESS_RULE_INVALID",
+            f"process.run_allowed: invalid allowed_file_roots for '{binary}'.",
+        )
+
+    if len(argv) > max_argv:
+        return _deny(
+            "ARGV_TOO_LONG",
+            f"process.run_allowed: argv length {len(argv)} exceeds max_argv={max_argv}.",
+        )
+
+    allowed_flag_set = set(allowed_flags)
+    i = 0
+    saw_pattern = False
+    file_operands: list[str] = []
+
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            return _deny(
+                "AMBIGUOUS_ARGV",
+                "process.run_allowed: '--' delimiter is not permitted.",
+            )
+
+        if tok.startswith("-"):
+            if tok not in allowed_flag_set:
+                return _deny(
+                    "UNEXPECTED_FLAG",
+                    f"process.run_allowed: flag '{tok}' is not allowed for '{binary}'.",
+                )
+
+            if binary == "/usr/bin/grep" and tok == "-e":
+                i += 1
+                if i >= len(argv):
+                    return _deny(
+                        "MISSING_FLAG_VALUE",
+                        "process.run_allowed: grep '-e' requires a pattern argument.",
+                    )
+                saw_pattern = True
+                i += 1
+                continue
+
+            if binary == "/usr/bin/head" and tok == "-n":
+                i += 1
+                if i >= len(argv):
+                    return _deny(
+                        "MISSING_FLAG_VALUE",
+                        "process.run_allowed: head '-n' requires a numeric argument.",
+                    )
+                i += 1
+                continue
+
+            i += 1
+            continue
+
+        if mode == "all_non_flag":
+            file_operands.append(tok)
+        elif mode == "all_non_flag_after_pattern":
+            if not saw_pattern:
+                saw_pattern = True
+            else:
+                file_operands.append(tok)
+        else:
+            return _deny(
+                "PROCESS_RULE_INVALID",
+                f"process.run_allowed: unsupported file_operand_mode '{mode}'.",
+            )
+        i += 1
+
+    if mode == "all_non_flag_after_pattern" and not saw_pattern:
+        return _deny(
+            "MISSING_PATTERN",
+            "process.run_allowed: grep requires a pattern operand or '-e' pattern.",
+        )
+
+    resolved_roots: list[str] = []
+    for root in allowed_file_roots:
+        resolved_root = _resolve_path_safe(root)
+        if resolved_root is None:
+            return _deny(
+                "PROCESS_RULE_INVALID",
+                f"process.run_allowed: invalid allowed_file_root '{root}' for '{binary}'.",
+            )
+        resolved_roots.append(resolved_root)
+
+    for operand in file_operands:
+        if operand == "-":
+            return _deny(
+                "AMBIGUOUS_ARGV",
+                "process.run_allowed: '-' stdin operand is not permitted.",
+            )
+        resolved_operand = _resolve_path_safe(operand)
+        if resolved_operand is None:
+            return _deny(
+                "INVALID_FILE_OPERAND",
+                f"process.run_allowed: cannot resolve file operand '{operand}'.",
+            )
+        if not any(_path_within_root(resolved_operand, r) for r in resolved_roots):
+            return _deny(
+                "FILE_OPERAND_OUTSIDE_ALLOWED_ROOT",
+                (
+                    f"process.run_allowed: file operand '{operand}' "
+                    f"(resolved: '{resolved_operand}') is not within allowed roots "
+                    f"{allowed_file_roots}."
+                ),
+            )
+
+    return None

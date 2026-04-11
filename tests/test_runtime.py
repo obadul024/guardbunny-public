@@ -339,3 +339,77 @@ steps:
     assert record["step_id"] == "read_ok"
     assert record["decision"]["allowed"] is True
     assert record["result_success"] is True
+
+
+def test_input_schema_missing_required_key_fails_before_execution(
+    rw_policy: Policy, workspace: Path
+):
+    (workspace / "x.txt").write_text("x")
+    workflow = f"""
+version: "1.0"
+name: "input_schema_required"
+input:
+  path:
+    type: string
+steps:
+  - id: read
+    do:
+      action: file.read
+      args:
+        path: "${{input.path}}"
+    emit: {{}}
+"""
+    result = Runtime(policy=rw_policy).run(workflow, {})
+    assert result.status == "failed"
+    assert any("InputSchemaValidationError" in e for e in result.errors)
+    assert result.step_count == 0
+
+
+def test_output_schema_mismatch_fails(rw_policy: Policy, workspace: Path):
+    (workspace / "x.txt").write_text("x")
+    workflow = f"""
+version: "1.0"
+name: "output_schema_mismatch"
+output:
+  count:
+    type: integer
+steps:
+  - id: read
+    do:
+      action: file.read
+      args:
+        path: "{workspace}/x.txt"
+    emit:
+      count: "${{steps.read.result.content}}"
+"""
+    result = Runtime(policy=rw_policy).run(workflow, {})
+    assert result.status == "failed"
+    assert any("OutputSchemaValidationError" in e for e in result.errors)
+
+
+def test_condition_evaluation_recorded_in_audit(rw_policy: Policy, workspace: Path):
+    (workspace / "x.txt").write_text("x")
+    workflow = f"""
+version: "1.0"
+name: "condition_audit"
+steps:
+  - id: branch
+    condition:
+      test: "input.flag == True"
+      then:
+        - id: read_x
+          do:
+            action: file.read
+            args:
+              path: "{workspace}/x.txt"
+          emit: {{}}
+      else: []
+"""
+    result = Runtime(policy=rw_policy).run(workflow, {"flag": True})
+    assert result.status == "success"
+    events = [e for e in result.audit if e.get("event") == "condition_evaluation"]
+    assert len(events) == 1
+    event = events[0]
+    assert event["step_id"] == "branch"
+    assert event["evaluated_result"] is True
+    assert event["branch_taken"] == "then"

@@ -103,8 +103,7 @@ cat > /tmp/guardbunny/input.json <<'EOF'
 EOF
 
 guardbunny examples/safe_read.gb \
-  --policy policies/default_policy.yaml \
-  --input /tmp/guardbunny/input.json
+  --policy policies/default_policy.yaml
 ```
 
 Run tests:
@@ -143,13 +142,17 @@ These guarantees are backed by the current implementation:
 
 * No `shell=True`
 * No arbitrary shell execution
-* No interpreter inline code (`python -c`, `bash -c`, etc.)
+* No interpreter inline code flags (`python -c/-m`, `node -e`, `bash -c`, etc.)
 * Default-deny policy
 * Per-step authorization
 * Policy re-check on every loop iteration and condition branch
 * Output size limits
 * Execution timeouts (process + HTTP)
-* Structured audit logging for every step
+* Structured audit logging for action steps, condition evaluations, and runtime normalization failures
+* Input schema validation before execution
+* Output schema validation before success return
+* HTTP scheme allowlist (`http`, `https` only)
+* HTTP redirects are not followed automatically
 
 ---
 
@@ -158,7 +161,7 @@ These guarantees are backed by the current implementation:
 These protections exist but are not complete:
 
 * File path safety (TOCTOU race possible)
-* Binary safety depends on policy quality
+* Binary safety depends on policy quality (process_run_rules must be strict)
 * Network safety limited to host allowlists
 * Minimal condition expression safety
 
@@ -189,7 +192,8 @@ This is the primary remaining attack surface.
 
 Even with allowlisted binaries:
 
-* arguments are fully controlled by the caller
+* arguments are constrained by policy-defined `process_run_rules`
+* rule mistakes still create bypasses
 * many standard binaries expose powerful behaviors
 
 For the MVP:
@@ -214,8 +218,7 @@ For the MVP:
 
 ## Current Limitations
 
-* Input schema is parsed but **not enforced yet**
-* Output schema is **not validated yet**
+* Schema validation currently supports JSON-schema style and a lightweight shorthand mapping format
 * No static validation CLI
 * No OS-level sandbox
 * Minimal DSL by design
