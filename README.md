@@ -1,18 +1,20 @@
+
 <p align="center">
   <img src="docs/logo.png" width="120"/>
 </p>
 
 # GuardBunny
 
-**A policy-gated execution runtime for LLM-generated plans.**
+**A policy-gated execution runtime for LLM- and agent-generated actions.**
 
-GuardBunny sits between an LLM and your system.
-It treats every plan as untrusted input, converts it into typed actions, checks each action against a policy, and executes only what is explicitly allowed.
+GuardBunny sits between an untrusted planner (LLM/agent) and your system.
+It converts proposed steps into typed actions, enforces a policy, and executes only what is explicitly allowed.
 
-> GuardBunny enforces policy constraints but is **NOT a hardened sandbox**.
-> It reduces risk compared to direct LLM execution, but does not eliminate it.
+> GuardBunny enforces application-layer constraints.
+> It is **not a hardened sandbox or OS-level isolation boundary**.
 
 ---
+
 ## TL;DR
 
 LLMs propose actions.
@@ -27,22 +29,23 @@ Think of it as a control layer between an LLM/agent and your system.
 
 ## What GuardBunny Is
 
-* A **bounded execution runtime**
-* A **typed action gateway (no free-form shell)**
-* A **policy-enforced planner/executor boundary**
+- A **bounded execution runtime**
+- A **typed action gateway (no free-form shell)**
+- A **policy-enforced planner/executor boundary**
+- A **control boundary between planners and systems**
 
 ## What GuardBunny Is NOT
 
-* Not a general-purpose programming language
-* Not a prompt language
-* Not a full agent framework
-* Not a secure sandbox
-* Not a guarantee of safety
+- Not a general-purpose programming language
+- Not a prompt language
+- Not a full agent framework
+- Not a secure sandbox
+- Not a guarantee of safety
 
 ---
 
-
 ## Core Model
+
 <p align="center">
   <img src="./docs/Architecture.png" width="420"/>
 </p>
@@ -55,8 +58,6 @@ Think of it as a control layer between an LLM/agent and your system.
 
 ## Core Workflow
 
-
-
 ![GuardBunny Architecture](docs/workflow.png)
 
 ## Attack Flow
@@ -65,23 +66,20 @@ Think of it as a control layer between an LLM/agent and your system.
   <img src="docs/Attackflow3.png" width="420"/>
 </p>
 
-
-
-
 **Key rule:**
 
 > The LLM suggests. The runtime decides.
 
 ---
 
-## Supported Actions (MVP)
+## Supported Actions
 
-| Action                | Description                             |
-| --------------------- | --------------------------------------- |
-| `file.read`           | Read file within allowed roots          |
-| `file.write`          | Write file within allowed roots         |
-| `http.fetch`          | HTTP request to allowed hosts           |
-| `process.run_allowed` | Run allowlisted binaries (strict rules) |
+| Action | Description |
+| --- | --- |
+| `file.read` | Read file within allowed roots |
+| `file.write` | Write file within allowed roots |
+| `http.fetch` | HTTP request with host + scheme restrictions |
+| `process.run_allowed` | Restricted subprocess execution (rule-based) |
 
 ---
 
@@ -92,19 +90,13 @@ pip install -e ".[dev]"
 
 mkdir -p /tmp/guardbunny
 echo "hello world" > /tmp/guardbunny/test.txt
-```
 
-Run:
-
-```bash
-
-cat > /tmp/guardbunny/input.json <<'EOF'
-{"file_path": "/tmp/guardbunny/test.txt"}
-EOF
+echo '{"file_path": "/tmp/guardbunny/test.txt"}' > input.json
 
 guardbunny examples/safe_read.gb \
-  --policy policies/default_policy.yaml
-```
+  --policy policies/default_policy.yaml \
+  --input input.json
+````
 
 Run tests:
 
@@ -136,23 +128,27 @@ steps:
 
 ---
 
-## What GuardBunny Actually Enforces
-
-These guarantees are backed by the current implementation:
+## What GuardBunny Enforces (Backed by Code)
 
 * No `shell=True`
-* No arbitrary shell execution
-* No interpreter inline code flags (`python -c/-m`, `node -e`, `bash -c`, etc.)
+* No direct shell execution
+* Interpreter inline-code flags blocked (`-c`, `-m`, etc.)
 * Default-deny policy
 * Per-step authorization
-* Policy re-check on every loop iteration and condition branch
-* Output size limits
-* Execution timeouts (process + HTTP)
-* Structured audit logging for action steps, condition evaluations, and runtime normalization failures
+* Policy re-check on every loop iteration and executed branch step
 * Input schema validation before execution
 * Output schema validation before success return
-* HTTP scheme allowlist (`http`, `https` only)
-* HTTP redirects are not followed automatically
+* Output size limits (file, HTTP, subprocess stdout/stderr)
+* Execution timeouts (HTTP + subprocess)
+* HTTP scheme allowlist (`http`, `https`)
+* HTTP redirect following disabled
+* Structured audit logging for:
+
+  * action proposals
+  * policy decisions
+  * execution results
+  * condition evaluations
+  * runtime failures
 
 ---
 
@@ -161,7 +157,7 @@ These guarantees are backed by the current implementation:
 These protections exist but are not complete:
 
 * File path safety (TOCTOU race possible)
-* Binary safety depends on policy quality (process_run_rules must be strict)
+* Binary safety depends on policy quality and strict `process_run_rules`
 * Network safety limited to host allowlists
 * Minimal condition expression safety
 
@@ -169,39 +165,45 @@ These protections exist but are not complete:
 
 ## What It Does NOT Protect Against
 
-* **Malicious argv in allowed binaries**
-  Example: `/usr/bin/grep` can read unintended files
+* **Malicious behavior inside allowed binaries**
+  Example: a weak `process_run_rules` policy can still make an allowed binary unsafe.
 
 * **Symlink race conditions (TOCTOU)**
-  Path may change between policy check and execution
-
-* **SSRF via allowed hosts**
-  GuardBunny cannot see beyond first-hop requests
+  Paths may change between policy check and execution.
 
 * **OS-level escape**
-  No container, namespace, or seccomp isolation yet
+  No container, namespace, seccomp, AppArmor, or privilege isolation yet.
 
 * **Malicious file contents**
-  No inspection of data being read or written
+  GuardBunny does not inspect the semantic safety of data being read or written.
+
+* **General secure subprocess execution**
+  `process.run_allowed` is restricted and rule-based, not a full secure command sandbox.
 
 ---
 
 ## Critical Warning: process.run_allowed
 
-This is the primary remaining attack surface.
+This is the highest-risk feature.
 
-Even with allowlisted binaries:
+GuardBunny now enforces:
 
-* arguments are constrained by policy-defined `process_run_rules`
-* rule mistakes still create bypasses
-* many standard binaries expose powerful behaviors
+* per-binary argument validation
+* allowed flag lists
+* file operand extraction
+* file root restrictions
+* binary allowlisting
 
-For the MVP:
+However:
+
+> This is a **restricted execution model**, not a general secure subprocess system.
+
+Recommended usage:
 
 * keep the binary allowlist extremely small (1–3 binaries max)
-* avoid filesystem traversal tools (`find`, etc.)
-* avoid interpreters (`python`, `node`, etc.)
-* consider disabling this action unless necessary
+* prefer `file.*` and `http.fetch` where possible
+* avoid interpreters and traversal-heavy tools
+* disable this action entirely if not needed
 
 ---
 
@@ -212,16 +214,17 @@ For the MVP:
 * Prefer `file.*` and `http.fetch` over `process.run_allowed`
 * Use small, controlled workspaces
 * Inspect audit logs for every run
-* Do not expose GuardBunny directly to untrusted users without additional isolation
+* Run under a low-privilege user
+* Combine with external sandboxing for higher security
 
 ---
 
 ## Current Limitations
 
-* Schema validation currently supports JSON-schema style and a lightweight shorthand mapping format
-* No static validation CLI
-* No OS-level sandbox
-* Minimal DSL by design
+* Schema validation is runtime-enforced, but the DSL remains intentionally minimal
+* No static validation CLI yet
+* No OS-level sandbox yet
+* Restricted subprocess support is explicitly narrow by design
 
 ---
 
@@ -246,30 +249,69 @@ legacy/
 
 ---
 
-## Roadmap (practical)
+## Roadmap
 
 Near-term:
 
-* input/output schema enforcement
-* static validation CLI
-* tighter argv restrictions
-* improved audit detail
+* static validation CLI (`guardbunny validate`)
+* stronger subprocess rules
+* improved audit completeness
 
 Mid-term:
 
-* container / namespace isolation
+* OS-level isolation (containers / namespaces)
 * stricter filesystem model
-* per-binary argument policies
+* improved policy ergonomics
 
 ---
 
-## One-line summary
+## Security Model
 
-> GuardBunny makes LLM actions explicit, auditable, and policy-controlled — safer than raw execution, but not a complete security boundary.
+### Untrusted
+
+* workflows
+* LLM outputs
+* runtime inputs
+
+### Trusted
+
+* GuardBunny runtime
+* policy configuration
+* host OS environment
+
+GuardBunny is a **runtime policy layer**, not a kernel- or container-level isolation mechanism.
+
+---
+
+## One-line Summary
+
+> GuardBunny makes LLM actions explicit, constrained, and auditable — safer than raw execution, but not a complete security boundary.
 
 ---
 
 ## Status
 
 Early-stage but functional.
-Suitable for experimentation and controlled environments, not production-critical systems.
+
+GuardBunny is suitable for:
+
+* controlled environments
+* research and experimentation
+* bounded execution pipelines
+
+Not suitable for:
+
+* high-security production environments (yet)
+
+---
+
+## Maintainer Note
+
+This project is released for public use and improvement.
+
+Active long-term maintenance is not guaranteed.
+
+If you want to extend or harden it, fork it and build on it.
+
+```
+```
