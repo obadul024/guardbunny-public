@@ -50,7 +50,7 @@ Think of it as a control layer between an LLM/agent and your system.
 ## Trust Boundary
 
 <p align="center">
-  <img src="./docs/TrustBoundary.png" width="420"/>
+  <img src="./docs/TrustBoundary.svg" width="420"/>
 </p>
 
 ## Core Workflow
