@@ -249,6 +249,62 @@ def test_forbidden_hosts_denied(url: str, tmp_path: Path):
     assert d.code == "HOST_NOT_ALLOWED"
 
 
+@pytest.mark.parametrize("url", [
+    # userinfo: naive netloc.split(":") sees api.example.com, urllib connects elsewhere
+    "http://api.example.com:x@evil.com/",
+    "http://api.example.com:80@127.0.0.1:8000/",
+    "https://api.example.com@evil.com/",
+    "https://user@api.example.com/",
+    # parser-differential shapes
+    "https://evil.com\\@api.example.com/",
+    "https://api.example.com%2f@evil.com/",
+    "https://api.example.com\t.evil.com/",
+    "https://api.example.com:99999/",
+    "https://api.example.com:abc/",
+    "https://api.exаmple.com/",  # Cyrillic 'а'
+    "https:///api.example.com/",
+    "file:///etc/passwd",
+    "ftp://api.example.com/",
+])
+def test_ambiguous_urls_denied(url: str, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy = _full_policy(tmp_path, workspace)
+
+    ir = _make_ir(ActionType.HTTP_FETCH, HttpFetchArgs(url=url, method="GET"))
+    d = policy.check(ir)
+    assert d.allowed is False, f"{url!r} was allowed"
+
+
+@pytest.mark.parametrize("url", [
+    "https://api.example.com/v1/items?x=1#frag",
+    "https://API.Example.COM/v1",
+    "https://api.example.com:8443/v1",
+    "http://api.example.com/",
+])
+def test_legitimate_urls_still_allowed(url: str, tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy = _full_policy(tmp_path, workspace)
+
+    ir = _make_ir(ActionType.HTTP_FETCH, HttpFetchArgs(url=url, method="GET"))
+    d = policy.check(ir)
+    assert d.allowed is True, d.reason
+
+
+@pytest.mark.parametrize("url", [
+    "http://api.example.com:x@127.0.0.1:1/",
+    "file:///etc/passwd",
+])
+def test_executor_revalidates_url_independently(url: str):
+    """Even if the policy were bypassed, the executor must refuse to connect."""
+    from guardbunny.executor import Executor, ExecutorError
+
+    ir = _make_ir(ActionType.HTTP_FETCH, HttpFetchArgs(url=url, method="GET"))
+    with pytest.raises(ExecutorError, match="refusing URL"):
+        Executor().execute(ir)
+
+
 def test_exfil_workflow_denied_end_to_end(tmp_path: Path):
     workspace = tmp_path / "ws"
     workspace.mkdir()

@@ -40,6 +40,7 @@ from .models import (
     ProcessRunArgs,
     StepResult,
 )
+from .urlcheck import UrlError, parse_url
 
 # Minimal environment passed to subprocesses.
 _SAFE_ENV_KEYS: frozenset[str] = frozenset({
@@ -141,8 +142,18 @@ class Executor:
         Fetch a URL using stdlib urllib only.
 
         No third-party HTTP library is used. The host and method were
-        authorized by the policy engine before this method is called.
+        authorized by the policy engine before this method is called; the URL
+        is re-validated here (defense in depth) so a policy-side parsing bug
+        cannot redirect the connection to a different host.
         """
+        try:
+            parse_url(args.url)
+        except UrlError as exc:
+            raise ExecutorError(
+                f"http.fetch: refusing URL ({exc.code}): "
+                f"{exc.reason.removeprefix('http.fetch: ')}"
+            ) from exc
+
         body_bytes: bytes | None = None
         if args.body is not None:
             body_bytes = (
