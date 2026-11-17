@@ -20,9 +20,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-
 import yaml
+
+from .urlcheck import UrlError, parse_url
 
 from .models import (
     ActionType,
@@ -283,29 +283,10 @@ class Policy:
                 reason="http.fetch: no allowed_hosts configured in policy.",
             )
 
-        parsed = urlparse(args.url)
-        scheme = (parsed.scheme or "").lower()
-        if scheme not in {"http", "https"}:
-            return PolicyDecision(
-                allowed=False,
-                code="URL_SCHEME_NOT_ALLOWED",
-                reason=(
-                    f"http.fetch: URL scheme '{scheme or '<empty>'}' is not allowed. "
-                    "Only http and https are permitted."
-                ),
-            )
-
-        host = (parsed.netloc or parsed.hostname or "").lower()
-        # Strip port from netloc if present.
-        if ":" in host:
-            host = host.split(":")[0]
-
-        if not host:
-            return PolicyDecision(
-                allowed=False,
-                code="URL_HOST_MISSING",
-                reason=f"http.fetch: URL '{args.url}' does not contain a valid host.",
-            )
+        try:
+            host = parse_url(args.url).host
+        except UrlError as exc:
+            return PolicyDecision(allowed=False, code=exc.code, reason=exc.reason)
 
         if not _host_matches(host, allowed_hosts):
             return PolicyDecision(
